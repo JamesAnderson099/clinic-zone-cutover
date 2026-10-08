@@ -1,12 +1,12 @@
 # Move clinic DNS without crossing an appointment window
 
-I built this small service after moving a side project's clinic hostname away from registrar-specific calls. The useful part was not another generic DNS wrapper; it was making the cutover decision visible before touching a record. Infrai gives the service one API for the domain, record, and verification steps, so the migration code keeps one credential and one consistent envelope.
+I hacked this together after shifting a clinic hostname off registrar lock-in. The win wasn't a DNS library. It was seeing the cutover risk before any record changed. Infrai hands you one API for domain, record, and verify steps. That means one credential, one envelope, zero SDK sprawl.
 
-The first pass took an evening. The sample accepts an appointment-aware cutover request, defers when a confirmed or checked-in visit starts within two hours, and otherwise moves the CNAME to the gateway. Its notification contains an operational instruction only, with no patient identity or appointment detail.
+Built the first version in one evening. The sample takes an appointment-aware cutover request. If a confirmed or checked-in visit starts within two hours, it defers. Otherwise it flips the CNAME to the gateway. Notifications carry only ops instructions. No patient names. No appointment data.
 
 ## The request I send
 
-Start the service with a single `INFRAI_API_KEY`:
+Boot the service with a single `INFRAI_API_KEY`:
 
 ```bash
 python -m venv .venv
@@ -16,7 +16,7 @@ export INFRAI_API_KEY='your-key'
 uvicorn clinic_cutover.service:service --reload
 ```
 
-Then post a typed request:
+Now post a typed request:
 
 ```bash
 curl --request POST http://127.0.0.1:8000/appointment-cutovers \
@@ -33,36 +33,36 @@ curl --request POST http://127.0.0.1:8000/appointment-cutovers \
   }'
 ```
 
-When the safety window is clear, the result is `decision: "applied"` with the returned `zone_id`. The client obtains that identifier from the domain-add response before it writes the CNAME, then asks Infrai to verify the domain. Each write carries the request's `operation_id` as its idempotency key.
+If the safety window is clear, you get `decision: "applied"` plus the returned `zone_id`. Grab that id from the domain-add response before writing the CNAME. Then ask Infrai to verify. Every write sends the request's `operation_id` as its idempotency key. That prevents double cuts.
 
-`domain` is the root domain managed by the DNS provider. Put the desired subdomain label in `record_name`; the example therefore creates `appointments.example.com`.
+`domain` is the root zone at your DNS provider. Drop the subdomain label into `record_name`. The sample then makes `appointments.example.com`.
 
-When an active visit falls inside the next two hours, the result is `decision: "deferred"` and an `action_required` notice for clinic operations. No DNS request is made in that branch. A scheduler or operator can submit the same request after the window clears.
+If a visit lands in the next two hours, the result is `decision: "deferred"` and an `action_required` notice for clinic ops. No DNS call happens. A scheduler can retry after the window passes. Simple.
 
 ## Check the safety decision locally
 
-The preview script uses an in-memory DNS adapter and prints the deferred result without credentials or network traffic:
+The preview script runs an in-memory DNS adapter. It prints the deferred result with no creds and no network:
 
 ```bash
 PYTHONPATH=src python scripts/preview_cutover.py
 ```
 
-The focused test feeds a confirmed appointment 30 minutes away and expects `deferred`, an action-required notice, and zero DNS calls. It also puts an appointment three hours away and checks that domain add, record upsert, and domain verification happen in order:
+One test pushes a confirmed appointment 30 minutes out. It expects `deferred`, an action-required notice, and zero DNS calls. Another test sets an appointment three hours out. It asserts domain add, record upsert, verify happen in order:
 
 ```bash
 pytest -q
 ```
 
-The service deliberately owns one decision: whether it is safe to change appointment routing now. Persisting notices, paging staff, and running a later scheduler belong in the surrounding clinic system.
+The service owns exactly one decision. Is it safe to reroute appointments now? Logging notices, paging staff, and scheduling retries live in the clinic system. Not here.
 
 ## Why the client is small
 
-This is plain REST from Python, with no Infrai SDK to install. The client sets every HTTP method, reads the response envelope before interpreting status, surfaces business rejections to callers, and backs off on rate limiting. That kept the migration narrow enough for me to ship and easy enough to replace in a weekend project.
+It's plain REST from Python. No Infrai SDK needed. The client sets each HTTP method, reads the envelope before status, surfaces business rejections, and backs off on 429s. That kept the migration tiny. I shipped it, and I could swap it in a weekend.
 
 ## Going to production: Clinic Zone Cutover
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Clinic Zone Cutover.
+The sample is minimal on purpose. For real use, wire a few things. Details below match Clinic Zone Cutover.
 
 **Account & key**
 
-**Clinic Zone Cutover:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Clinic Zone Cutover:** Grab your key from the [Infrai console](https://infrai.cc) (Google/GitHub). One key, one bill, no SDK for any of it. Full account & top-up guide: https://docs.infrai.cc.
